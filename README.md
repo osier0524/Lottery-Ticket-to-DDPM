@@ -2,6 +2,10 @@
 
 test.ipynb is an example that adapt Lottery Ticket Hypothesis to DDPM
 
+## Dataset
+I use cifar10 as the dataset. Here is the link: https://www.kaggle.com/competitions/cifar-10/data
+Images should be downloaded to a folder named dataset/train
+
 ## Usage
 
 ```python
@@ -21,13 +25,13 @@ diffusion = GaussianDiffusion(
 
 pruning_trainer = Trainer(
     diffusion,
-    "/content/drive/MyDrive/Projects/DDPM/dataset/train",
+    "./dataset_path",
     train_batch_size = 20,
     train_lr = 8e-5,
     train_num_steps = 2000,         # total training steps
     gradient_accumulate_every = 2,    # gradient accumulation steps
     ema_decay = 0.995,                # exponential moving average decay
-    results_folder = "/content/drive/MyDrive/Projects/DDPM/results",
+    results_folder = "./results",
     amp = True,                       # turn on mixed precision
     calculate_fid = True              # whether to calculate fid during training
 )
