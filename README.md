@@ -1,6 +1,6 @@
 ## Lottery-Ticket-Hypothesis-in-DDPM
 
-test.ipynb is an example that adapt Lottery Ticket Hypothesis to DDPM
+test.ipynb is an example that adapts Lottery Ticket Hypothesis to DDPM
 
 ## Dataset
 I use cifar10 as the dataset. Here is the link: https://www.kaggle.com/competitions/cifar-10/data
