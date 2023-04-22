@@ -2,6 +2,7 @@ import math
 import copy
 import os
 import numpy as np
+import pandas as pd
 from pathlib import Path
 from random import random
 from functools import partial
@@ -970,10 +971,12 @@ class Trainer(object):
 
     # Pruning Functions
     # Prune by Percentile module
-    def prune_by_percentile(self, percent, resample=False, reinit=False,**kwargs):
+    def prune_by_percentile(self, percent, resample=False, reinit=False,ite=0, **kwargs):
             global pruning_step
             global mask
 
+            df = pd.DataFrame()
+            percent_df = pd.DataFrame()
             # Calculate percentile value
             pruning_step = 0
             for name, param in self.model.named_parameters():
@@ -981,21 +984,45 @@ class Trainer(object):
                 # We do not prune bias term
                 if 'weight' in name:
                     tensor = param.data.cpu().numpy()
+
                     # alive = tensor[np.nonzero(tensor)] # flattened array of nonzero values
                     flattened_tensor = tensor.flatten()
                     alive = flattened_tensor[flattened_tensor != 0]
-                    if len(alive)==0: percentile_value = 0.
-                    else: percentile_value = np.percentile(abs(alive), percent)
+                    if len(alive)==0: 
+                        percentile_value = 0.
+                        value = [0]
+                    else: 
+                        value = abs(alive)
+                        percentile_value = np.percentile(abs(alive), percent)
+                    
+                    value_df = pd.DataFrame(value, columns=[name])
+                    df = pd.concat([df, value_df], axis=1)
 
+                    percentile_value_df = pd.DataFrame([percentile_value], columns=[name])
+                    percent_df = pd.concat([percent_df, percentile_value_df], axis=1)
+                    #print(f'{name}_percentile value: {percentile_value}')
                     # Convert Tensors to numpy and calculate
                     weight_dev = param.device
-                    new_mask = np.where(abs(tensor) <= percentile_value, 0, mask[pruning_step])
-                    
+                    new_mask = np.where(abs(tensor) < percentile_value, 0, mask[pruning_step])
+                    if name == 'model.init_conv.weight':
+                        print(f'mask {ite}')
+                        print(f'alive shape: {alive.shape}')
+                        print(f'percentile: {percentile_value}')
+                        _nonzero = np.count_nonzero(new_mask)
+                        _total = np.prod(new_mask.shape)
+                        print(f'previous masked count: {np.prod(mask[pruning_step].shape)-np.count_nonzero(mask[pruning_step])}')
+                        print(f'masked count: {_total-_nonzero}')
                     # Apply new weight and mask
                     param.data = torch.from_numpy(tensor * new_mask).to(weight_dev)
+                    if name == 'model.init_conv.weight':
+                        after_tensor = param.data.cpu().numpy().flatten()
+                        after_alive = after_tensor[after_tensor != 0]
+                        print(f'after pruning alive shape: {after_alive.shape}')
                     mask[pruning_step] = new_mask
                     pruning_step += 1
             pruning_step = 0
+            #df.to_csv('/content/drive/MyDrive/Projects/DDPM/weights/weights_'+str(ite)+'.csv', index=False)
+            #percent_df.to_csv('/content/drive/MyDrive/Projects/DDPM/weights/percentile_'+str(ite)+'.csv', index=False)
 
     def make_mask(self, model):
         global pruning_step
@@ -1130,7 +1157,7 @@ class Trainer(object):
 
         for _ite in range(self.prune_start_iter, self.prune_end_iter):
             if not _ite == 0:
-                self.prune_by_percentile(percent=self.prune_percent, resample=self.resample, reinit=reinit)
+                self.prune_by_percentile(percent=self.prune_percent, resample=self.resample, reinit=reinit, ite=_ite)
                 if reinit:
                     self.model.apply(self.weight_init)
                     pruning_step = 0
@@ -1174,18 +1201,25 @@ class Trainer(object):
 
 
                         # Freezing Pruned weights
-                        for name, p in self.model.named_parameters():
-                            if 'weight' in name:
-                                tensor = p.data.cpu().numpy()
-                                grad_tensor = p.grad.data.cpu().numpy()
+                        
+                        # for name, p in self.model.named_parameters():
+                        #     if 'weight' in name:
 
-                                flattened_tensor = tensor.flatten()
-                                nonzero_values = flattened_tensor[flattened_tensor != 0]
-                                if len(nonzero_values) != 0:
-                                    EPS = np.percentile(abs(nonzero_values), 20)
+                        #         tensor = p.data.cpu().numpy()
+                        #         grad_tensor = p.grad.data.cpu().numpy()
 
-                                grad_tensor = np.where(abs(tensor) <= EPS, 0, grad_tensor)  #取最小20%
-                                p.grad.data = torch.from_numpy(grad_tensor).to(device)
+                        #         flattened_tensor = tensor.flatten()
+                        #         nonzero_values = flattened_tensor[flattened_tensor != 0]
+                        #         if len(nonzero_values) != 0:
+                        #             EPS = np.percentile(abs(nonzero_values), 20)
+                        #         if name == 'model.init_conv.weight': print(f'EPS: {EPS}')
+                        #         grad_tensor = np.where(abs(tensor) < EPS, 0, grad_tensor)  #取最小20%
+                        #         grad_mask = torch.ones_like(p)
+                        #         grad_mask[p.abs()<EPS] = 0
+                        #         p.grad *= grad_mask
+                        print(f'step: {self.step}')
+                        self.freezing_grad()
+                        self.print_alive_grad()
 
                     accelerator.clip_grad_norm_(self.model.parameters(), 1.0)
                     pbar.set_description(f'loss: {total_loss:.4f}')
@@ -1238,6 +1272,8 @@ class Trainer(object):
 
                     iter_+=1
                     pbar.update(1)
+                
+            self.print_alive()
 
             writer.add_scalar('Score/test', best_score, comp1)
             bestsco[_ite] = best_score
@@ -1294,3 +1330,93 @@ class Trainer(object):
     def test_fn(self):
         reinit = False
         self.prune_by_percentile(percent=self.prune_percent, resample=self.resample, reinit=reinit)
+    
+    def print_alive(self, **kwargs):
+            global pruning_step
+            global mask
+
+            # Calculate percentile value
+            pruning_step = 0
+            for name, param in self.model.named_parameters():
+
+                # We do not prune bias term
+                if 'weight' in name:
+                    tensor = param.data.cpu().numpy()
+                    flattened_tensor = tensor.flatten()
+                    alive = flattened_tensor[flattened_tensor != 0]
+                    
+                    if name == 'model.init_conv.weight':
+                        print(f'after bp alive shape: {alive.shape}')
+                        break
+                    pruning_step += 1
+            pruning_step = 0
+
+    def print_alive_grad(self, **kwargs):
+            global pruning_step
+            global mask
+
+            # Calculate percentile value
+            pruning_step = 0
+            for name, param in self.model.named_parameters():
+
+                # We do not prune bias term
+                if 'weight' in name:
+                    tensor = param.data.cpu().numpy()
+                    flattened_tensor = tensor.flatten()
+                    alive = flattened_tensor[flattened_tensor != 0]
+                    
+                    grad_tensor = param.data.cpu().numpy().flatten()
+                    alive_grad = grad_tensor[grad_tensor!=0]
+                    if name == 'model.init_conv.weight':
+                        print(f'alive data shape: {alive.shape}')
+                        print(f'alive grad shape: {alive_grad.shape}')
+                        break
+                    pruning_step += 1
+            pruning_step = 0
+
+    def freezing_grad(self):
+        global pruning_step
+        global mask
+
+        pruning_step=0
+        
+        # for name, p in self.model.named_parameters():
+        #     if 'weight' in name:
+
+        #         tensor = p.data.cpu().numpy()
+        #         grad_tensor = p.grad.data.cpu().numpy()
+
+        #         flattened_tensor = tensor.flatten()
+        #         nonzero_values = flattened_tensor[flattened_tensor != 0]
+        #         if len(nonzero_values) != 0:
+        #             EPS = np.percentile(abs(nonzero_values), 20)
+        #         if name == 'model.init_conv.weight': print(f'EPS: {EPS}')
+        #         grad_tensor = np.where(abs(tensor) < EPS, 0, grad_tensor)  #取最小20%
+        #         grad_mask = torch.ones_like(p)
+        #         print(f'grad_mask: {grad_mask.shape}')
+        #         print(f'mask: {mask[pruning_step].shape}')
+        #         grad_mask *= torch.from_numpy(mask[pruning_step]).to(p.device)
+        #         grad_mask[p.abs()<EPS] = 0
+        #         p.grad *= grad_mask
+        #     pruning_step+=1
+
+        for name, p in self.model.named_parameters():
+            if 'weight' in name:
+                tensor = p.data.cpu().numpy()
+                grad_tensor = p.grad.data.cpu().numpy()
+
+                flattened_tensor = tensor.flatten()
+                nonzero_values = flattened_tensor[flattened_tensor != 0]
+                if len(nonzero_values) != 0:
+                    EPS = np.percentile(abs(nonzero_values), 20)
+                
+                grad_tensor *= mask[pruning_step]
+                if name == 'model.init_conv.weight': 
+                    print(f'EPS: {EPS}')
+                    print(f'unmasked number: {np.count_nonzero(mask[pruning_step])}')
+                    print(f'nonzero grad: {np.count_nonzero(grad_tensor)}')
+                p.grad = torch.from_numpy(grad_tensor).to(p.device)
+
+                pruning_step+=1
+
+        pruning_step=0
