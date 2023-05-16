@@ -89,38 +89,6 @@ Plots will be saved to `./plots`
 
 
 
-The function that adds mask (path: ./denoising_diffusion_pytorch/denoising_diffusion_pytorch.py)
-```python
-def prune_by_percentile(self, percent, resample=False, reinit=False,**kwargs):
-        global pruning_step
-        global mask
-
-        # Calculate percentile value
-        pruning_step = 0
-        for name, param in self.model.named_parameters():
-
-            # We do not prune bias term
-            if 'weight' in name:
-                tensor = param.data.cpu().numpy()
-                # alive = tensor[np.nonzero(tensor)] # flattened array of nonzero values
-                flattened_tensor = tensor.flatten()
-                alive = flattened_tensor[flattened_tensor != 0]
-                if len(alive)==0: percentile_value = 0.
-                else: percentile_value = np.percentile(abs(alive), percent)
-
-                # Convert Tensors to numpy and calculate
-                weight_dev = param.device
-                new_mask = np.where(abs(tensor) <= percentile_value, 0, mask[pruning_step])
-                
-                # Apply new weight and mask
-                param.data = torch.from_numpy(tensor * new_mask).to(weight_dev)
-                mask[pruning_step] = new_mask
-                pruning_step += 1
-        pruning_step = 0
-```
-
-
-
 
 ## Citations
 
