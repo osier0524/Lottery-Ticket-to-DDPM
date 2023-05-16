@@ -3,13 +3,16 @@
 test.ipynb is an example that adapts Lottery Ticket Hypothesis to DDPM
 
 ## Dataset
-I use cifar10 as the dataset. Here is the link: https://www.kaggle.com/competitions/cifar-10/data
-Images should be downloaded to a folder named dataset/train
+I use [cifar10](https://www.kaggle.com/competitions/cifar-10/data), [cifar100](https://www.kaggle.com/datasets/fedesoriano/cifar100) as the dataset.
+Images should be downloaded to a folder named dataset/XXX. Only need to download train set.
 
 ## Usage
 
+1. Dataset: cifar10  Model: DDPM
 ```python
-# Pruning Test
+from denoising_diffusion_pytorch import Unet, GaussianDiffusion, Trainer
+
+# Dataset: cifar10 Model: DDPM
 model = Unet(
     dim = 64,
     dim_mults = (1, 2, 4, 8)
@@ -25,21 +28,65 @@ diffusion = GaussianDiffusion(
 
 pruning_trainer = Trainer(
     diffusion,
-    "./dataset_path",
+    "./dataset/cifar10",               # path of dataset cifar10
     train_batch_size = 20,
     train_lr = 8e-5,
     train_num_steps = 2000,         # total training steps
+    prune_end_iter = 30,            # pruning steps
     gradient_accumulate_every = 2,    # gradient accumulation steps
     ema_decay = 0.995,                # exponential moving average decay
     results_folder = "./results",
     amp = True,                       # turn on mixed precision
-    calculate_fid = True              # whether to calculate fid during training
+    calculate_fid = True,              # whether to calculate fid during training
+    dataset = 'cifar10'
+    arch_type = 'DDPM'
 )
 
-pruning.train()
+# Start to train
+pruning_trainer.train()
+```
+
+2. Dataset: cifar100 Model: DDPM
+```python
+from denoising_diffusion_pytorch import Unet, GaussianDiffusion, Trainer
+
+# Dataset: cifar10 Model: DDPM
+model = Unet(
+    dim = 64,
+    dim_mults = (1, 2, 4, 8)
+)
+
+diffusion = GaussianDiffusion(
+    model,
+    image_size = 32,
+    timesteps = 1000,           # number of steps
+    sampling_timesteps = 250,   # number of sampling timesteps (using ddim for faster inference [see citation for ddim paper])
+    loss_type = 'l1'            # L1 or L2
+)
+
+pruning_trainer = Trainer(
+    diffusion,
+    "./dataset/cifar100",               # path of dataset cifar100
+    train_batch_size = 20,
+    train_lr = 8e-5,
+    train_num_steps = 2000,         # total training steps
+    prune_end_iter = 30,            # pruning steps
+    gradient_accumulate_every = 2,    # gradient accumulation steps
+    ema_decay = 0.995,                # exponential moving average decay
+    results_folder = "./results",
+    amp = True,                       # turn on mixed precision
+    calculate_fid = True,              # whether to calculate fid during training
+    dataset = 'cifar100',
+    arch_type = 'DDPM'
+)
+
+# Start to train
+pruning_trainer.train()
 ```
 
 Samples and model checkpoints will be logged to `./results` periodically
+Plots will be saved to `./plots`
+
 
 
 The function that adds mask (path: ./denoising_diffusion_pytorch/denoising_diffusion_pytorch.py)

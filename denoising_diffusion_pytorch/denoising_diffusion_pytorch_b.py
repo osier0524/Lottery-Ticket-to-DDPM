@@ -8,7 +8,6 @@ from random import random
 from functools import partial
 from collections import namedtuple
 from multiprocessing import cpu_count
-import matplotlib.pyplot as plt
 
 import torch
 from torch import nn, einsum
@@ -844,8 +843,6 @@ class Trainer(object):
     ):
         super().__init__()
 
-        self.cwd = '/content/drive/MyDrive/Projects/DDPM/'
-
         # accelerator
 
         self.accelerator = Accelerator(
@@ -898,7 +895,7 @@ class Trainer(object):
         
         dl = DataLoader(self.ds, batch_size = train_batch_size, shuffle = True, pin_memory = True, num_workers = cpu_count())
 
-        dl = self.accelerator.prepare(dl)
+        #dl = self.accelerator.prepare(dl)
         self.dl = cycle(dl)
 
         # optimizer
@@ -907,9 +904,9 @@ class Trainer(object):
 
         # for logging results in a folder periodically
 
-        if self.accelerator.is_main_process:
-            self.ema = EMA(diffusion_model, beta = ema_decay, update_every = ema_update_every)
-            self.ema.to(self.device)
+        #if self.accelerator.is_main_process:
+        self.ema = EMA(diffusion_model, beta = ema_decay, update_every = ema_update_every)
+        self.ema.to(self.device)
 
         self.results_folder = Path(results_folder)
         self.results_folder.mkdir(exist_ok = True)
@@ -920,12 +917,10 @@ class Trainer(object):
         return self.accelerator.device
 
     def save(self, milestone):
-        if not self.accelerator.is_local_main_process:
-            return
 
         data = {
             'step': self.step,
-            'model': self.accelerator.get_state_dict(self.model),
+            'model': self.model.state_dict(),
             'opt': self.opt.state_dict(),
             'ema': self.ema.state_dict(),
             'scaler': self.accelerator.scaler.state_dict() if exists(self.accelerator.scaler) else None,
@@ -935,13 +930,11 @@ class Trainer(object):
         torch.save(data, str(self.results_folder / f'model-{milestone}.pt'))
 
     def load(self, milestone):
-        accelerator = self.accelerator
-        device = accelerator.device
+        device = self.device
 
         data = torch.load(str(self.results_folder / f'model-{milestone}.pt'), map_location=device)
 
-        model = self.accelerator.unwrap_model(self.model)
-        model.load_state_dict(data['model'])
+        self.model.load_state_dict(data['model'])
 
         self.step = data['step']
         self.opt.load_state_dict(data['opt'])
@@ -998,19 +991,34 @@ class Trainer(object):
                         value = abs(alive)
                         percentile_value = np.percentile(abs(alive), percent)
                     
-                    value_df = pd.DataFrame(value, columns=[name])
-                    df = pd.concat([df, value_df], axis=1)
+                    # value_df = pd.DataFrame(value, columns=[name])
+                    # df = pd.concat([df, value_df], axis=1)
 
-                    percentile_value_df = pd.DataFrame([percentile_value], columns=[name])
-                    percent_df = pd.concat([percent_df, percentile_value_df], axis=1)
+                    # percentile_value_df = pd.DataFrame([percentile_value], columns=[name])
+                    # percent_df = pd.concat([percent_df, percentile_value_df], axis=1)
+                    #print(f'{name}_percentile value: {percentile_value}')
                     # Convert Tensors to numpy and calculate
                     weight_dev = param.device
                     new_mask = np.where(abs(tensor) < percentile_value, 0, mask[pruning_step])
+                    if name == 'model.init_conv.weight':
+                        print(f'mask {ite}')
+                        print(f'alive shape: {alive.shape}')
+                        print(f'percentile: {percentile_value}')
+                        _nonzero = np.count_nonzero(new_mask)
+                        _total = np.prod(new_mask.shape)
+                        print(f'previous masked count: {np.prod(mask[pruning_step].shape)-np.count_nonzero(mask[pruning_step])}')
+                        print(f'masked count: {_total-_nonzero}')
                     # Apply new weight and mask
                     param.data = torch.from_numpy(tensor * new_mask).to(weight_dev)
+                    if name == 'model.init_conv.weight':
+                        after_tensor = param.data.cpu().numpy().flatten()
+                        after_alive = after_tensor[after_tensor != 0]
+                        print(f'after pruning alive shape: {after_alive.shape}')
                     mask[pruning_step] = new_mask
                     pruning_step += 1
             pruning_step = 0
+            #df.to_csv('/content/drive/MyDrive/Projects/DDPM/weights/weights_'+str(ite)+'.csv', index=False)
+            #percent_df.to_csv('/content/drive/MyDrive/Projects/DDPM/weights/percentile_'+str(ite)+'.csv', index=False)
 
     def make_mask(self, model):
         global pruning_step
@@ -1113,8 +1121,7 @@ class Trainer(object):
 
     def train(self):
         ITE = 1
-        accelerator = self.accelerator
-        device = accelerator.device
+        device = self.device
         reinit = True if self.prune_type=='reinit' else False
 
         #Weight Initialization
@@ -1122,8 +1129,8 @@ class Trainer(object):
 
         # Copying and Saving Initial State
         initial_state_dict = copy.deepcopy(self.model.state_dict())
-        utils.checkdir(f"{self.cwd}/saves/{self.arch_type}/{self.dataset}/")
-        torch.save(self.model, f"{self.cwd}/saves/{self.arch_type}/{self.dataset}/initial_state_dict_{self.prune_type}.pth.tar")
+        utils.checkdir(f"{os.getcwd()}/saves/{self.arch_type}/{self.dataset}/")
+        torch.save(self.model, f"{os.getcwd()}/saves/{self.arch_type}/{self.dataset}/initial_state_dict_{self.prune_type}.pth.tar")
 
         #Making Initial Mask
         self.make_mask(self.model)
@@ -1133,19 +1140,21 @@ class Trainer(object):
         #     print(name, param.size())
 
 
-        best_score = np.inf
+        bestsco = 1.0
+        best_score = 1
         ITERATION = self.prune_end_iter
         comp = np.zeros(ITERATION, float)
         bestsco = np.zeros(ITERATION,float)
         prune_step = 0
         all_loss = np.zeros(self.train_num_steps,float)
         all_score = np.zeros(self.train_num_steps,float)
-        fid_score = 0.
         
 
         for _ite in range(self.prune_start_iter, self.prune_end_iter):
             if not _ite == 0:
                 self.prune_by_percentile(percent=self.prune_percent, resample=self.resample, reinit=reinit, ite=_ite)
+                print('---after prune---')
+                self.print_alive()
                 if reinit:
                     self.model.apply(self.weight_init)
                     pruning_step = 0
@@ -1165,120 +1174,151 @@ class Trainer(object):
 
             # step counter state
             self.step = 0
-            # prepare model, dataloader, optimizer with accelerator
-            self.model, self.opt = self.accelerator.prepare(self.model, self.opt)
             
             iter_ = 0
-            with tqdm(initial = self.step, total = self.train_num_steps, disable = not accelerator.is_main_process) as pbar:
+            print('-----before train-----')
+            self.print_alive() # 正常
+            with tqdm(initial = self.step, total = self.train_num_steps) as pbar:
                  
                 while self.step < self.train_num_steps:
+                    print(f'step: {self.step}')
+                    self.print_alive() # step1开始不正常
                     EPS = 1e-6
                     total_loss = 0.
+                    fid_score = 0.
 
+                    # Frequency for Testing
+                    if self.step != 0 and self.step % self.save_and_sample_every == 0:
+                        self.ema.ema_model.eval()
+
+                        with torch.no_grad():
+                            milestone = self.step // self.save_and_sample_every
+                            batches = num_to_groups(self.num_samples, self.batch_size)
+                            all_images_list = list(map(lambda n: self.ema.ema_model.sample(batch_size=n), batches))
+
+                        all_images = torch.cat(all_images_list, dim = 0)
+
+                        tv_utils.save_image(all_images, str(self.results_folder / f'sample-{milestone}.png'), nrow = int(math.sqrt(self.num_samples)))
+                        self.save(milestone)
+
+                        # whether to calculate fid
+
+                        if exists(self.inception_v3):
+                            fid_score = self.fid_score(real_samples = data, fake_samples = all_images)
+                            print(f'fid_score: {fid_score}')
+                            if fid_score < best_score:
+                                best_score = fid_score
+                                utils.checkdir(f"{os.getcwd()}/saves/{self.arch_type}/{self.dataset}/")
+                                
+                                #可行???
+                                # self.model, self.opt = self.accelerator.prepare(self.model.half(), self.opt)
+                                # self.model = self.accelerator.unwrap_model(self.model)
+                                # torch.save(self.model,f"{os.getcwd()}/saves/{self.arch_type}/{self.dataset}/{_ite}_model_{self.prune_type}.pth.tar")
+
+
+                    # 分batch取数据
                     for _ in range(self.gradient_accumulate_every):
                         data = next(self.dl).to(device)
 
-                        with self.accelerator.autocast():
-                            loss = self.model(data)
-                            loss = loss / self.gradient_accumulate_every
-                            total_loss += loss.item()
+                        loss = self.model(data)
+                        loss = loss / self.gradient_accumulate_every
+                        total_loss += loss.item()
 
-                        self.accelerator.backward(loss)
+                        loss.backward()
 
-                    accelerator.clip_grad_norm_(self.model.parameters(), 1.0)
+                        # Freezing Pruned weights
+                        
+                        # for name, p in self.model.named_parameters():
+                        #     if 'weight' in name:
+
+                        #         tensor = p.data.cpu().numpy()
+                        #         grad_tensor = p.grad.data.cpu().numpy()
+
+                        #         flattened_tensor = tensor.flatten()
+                        #         nonzero_values = flattened_tensor[flattened_tensor != 0]
+                        #         if len(nonzero_values) != 0:
+                        #             EPS = np.percentile(abs(nonzero_values), 20)
+                        #         if name == 'model.init_conv.weight': print(f'EPS: {EPS}')
+                        #         grad_tensor = np.where(abs(tensor) < EPS, 0, grad_tensor)  #取最小20%
+                        #         grad_mask = torch.ones_like(p)
+                        #         grad_mask[p.abs()<EPS] = 0
+                        #         p.grad *= grad_mask
+                        print(f'step: {self.step}')
+                        #self.freezing_grad()
+                        #self.print_alive_grad()
+                
+                    print('-----after bp-----')
+                    self.print_alive_grad() # 正常
+                    #nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                    print('------after clip-----')
+                    self.print_alive_grad()
                     pbar.set_description(f'loss: {total_loss:.4f}')
-
-
-                    accelerator.wait_for_everyone()
-
-                    # Freezing Pruned weights
+                    print('-----freezing-----')
                     self.freezing_grad()
                     self.opt.step()
+                    print('-----after opt-----')
+                    self.print_alive_grad() # 不正常
                     self.ensure_mask()
+                    print('-----after ensure-----')
+                    self.print_alive_grad()
                     self.opt.zero_grad()
-
-                    accelerator.wait_for_everyone()
+                    
 
                     self.step += 1
 
-                    if accelerator.is_main_process:
-                        self.ema.update()
+                    #if accelerator.is_main_process:
+                    self.ema.update()
 
-                        # Frequency for Sampling
-                        if self.step != 0 and self.step % self.save_and_sample_every == 0:
-                            self.ema.ema_model.eval()
+                    all_loss[iter_] = total_loss
+                    all_score[iter_] = fid_score
 
-                            with torch.no_grad():
-                                milestone = self.step // self.save_and_sample_every
-                                batches = num_to_groups(self.num_samples, self.batch_size)
-                                all_images_list = list(map(lambda n: self.ema.ema_model.sample(batch_size=n), batches))
-
-                            all_images = torch.cat(all_images_list, dim = 0)
-
-                            tv_utils.save_image(all_images, str(self.results_folder / f'sample-{milestone}.png'), nrow = int(math.sqrt(self.num_samples)))
-                            self.save(milestone)
-
-                            # whether to calculate fid
-
-                            if exists(self.inception_v3):
-                                fid_score = self.fid_score(real_samples = data, fake_samples = all_images)
-                                accelerator.print(f'fid_score: {fid_score}')
-                                if fid_score < best_score:
-                                    best_score = fid_score
-                                    utils.checkdir(f"{self.cwd}/saves/{self.arch_type}/{self.dataset}/")
-                                    
-                                    #可行???
-                                    # self.model, self.opt = self.accelerator.prepare(self.model.half(), self.opt)
-                                    # self.model = self.accelerator.unwrap_model(self.model)
-                                    # torch.save(self.model,f"{os.getcwd()}/saves/{self.arch_type}/{self.dataset}/{_ite}_model_{self.prune_type}.pth.tar")
-                        all_loss[iter_] = total_loss
-                        all_score[iter_] = fid_score
+                            
 
                     iter_+=1
                     pbar.update(1)
+                
+            self.print_alive()
 
             writer.add_scalar('Score/test', best_score, comp1)
             bestsco[_ite] = best_score
 
-            plt.plot(np.arange(1,(self.train_num_steps)+1), (all_loss - np.min(all_loss))/np.ptp(all_loss).astype(float), c="blue", label="Loss") 
-            plt.plot(np.arange(1,(self.train_num_steps)+1), all_score, c="red", label="Accuracy") 
-            plt.title(f"Loss Vs Accuracy Vs Iterations ({self.dataset},{self.arch_type})") 
-            plt.xlabel("Iterations") 
-            plt.ylabel("Loss and Accuracy") 
-            plt.legend() 
-            plt.grid(color="gray") 
-            utils.checkdir(f"{self.cwd}/plots/lt/{self.arch_type}/{self.dataset}/")
-            plt.savefig(f"{self.cwd}/plots/lt/{self.arch_type}/{self.dataset}/{self.prune_type}_LossVsAccuracy_{comp1}.png", dpi=1200) 
-            plt.close()
+                # self.plot_result()
 
-            best_score = np.inf
-            all_loss = np.zeros(self.train_num_steps,float)
-            all_score = np.zeros(self.train_num_steps,float)
+        print('training complete')
 
-        # Dumping Values for Plotting
-        utils.checkdir(f"{self.cwd}/dumps/lt/{self.arch_type}/{self.dataset}/")
-        comp.dump(f"{self.cwd}/dumps/lt/{self.arch_type}/{self.dataset}/{self.prune_type}_compression.dat")
-        bestsco.dump(f"{self.cwd}/dumps/lt/{self.arch_type}/{self.dataset}/{self.prune_type}_bestscore.dat")
+    def process_one_batch():
 
-        # Plotting
-        a = np.arange(self.prune_end_iter)
-        plt.plot(a, bestsco, c="blue", label="Winning tickets") 
-        plt.title(f"Fid Score vs Unpruned Weights Percentage ({self.dataset},{self.arch_type})") 
-        plt.xlabel("Unpruned Weights Percentage") 
-        plt.ylabel("fid score") 
-        plt.xticks(a, comp, rotation ="vertical") 
-        plt.ylim(0,5)
-        plt.legend() 
-        plt.grid(color="gray") 
-        utils.checkdir(f"{self.cwd}/plots/lt/{self.arch_type}/{self.dataset}/")
-        plt.savefig(f"{self.cwd}/plots/lt/{self.arch_type}/{self.dataset}/{self.prune_type}_AccuracyVsWeights.png", dpi=1200) 
-        plt.close()    
+        EPS = 1e-6
+        
+        for _ in range(self.gradient_accumulate_every):
+            data = next(self.dl).to(device)
 
-        # self.plot_result()
+            with self.accelerator.autocast():
+                loss = self.model(data)
+                loss = loss / self.gradient_accumulate_every
+                total_loss += loss.item()
 
-        accelerator.print('training complete')
+            self.accelerator.backward(loss)
 
 
+            # Mask
+            for name, p in self.model.named_parameters():
+                if 'weight' in name:
+                    tensor = p.data.cpu().numpy()
+                    grad_tensor = p.grad.data.cpu().numpy()
+                    grad_tensor = np.where(tensor < EPS, 0, grad_tensor)
+                    p.grad.data = torch.from_numpy(grad_tensor).to(device)
+
+
+
+        accelerator.clip_grad_norm_(self.model.parameters(), 1.0)
+        pbar.set_description(f'loss: {total_loss:.4f}')
+
+        accelerator.wait_for_everyone()
+
+        self.opt.step()
+        self.opt.zero_grad()
+    
     def plot_result():
         plt.plot(np.arange(1,(self.train_num_steps)+1), 100*(all_loss - np.min(all_loss))/np.ptp(all_loss).astype(float), c="blue", label="Loss") 
         plt.plot(np.arange(1,(self.train_num_steps)+1), all_accuracy, c="red", label="Accuracy") 
@@ -1310,39 +1350,59 @@ class Trainer(object):
                     alive = flattened_tensor[flattened_tensor != 0]
                     
                     if name == 'model.init_conv.weight':
-                        print(f'after bp alive shape: {alive.shape}')
+                        print(f'alive shape: {alive.shape}')
                         break
                     pruning_step += 1
             pruning_step = 0
 
     def print_alive_grad(self, **kwargs):
-            global pruning_step
-            global mask
+        global pruning_step
+        global mask
 
-            # Calculate percentile value
-            pruning_step = 0
-            for name, param in self.model.named_parameters():
+        # Calculate percentile value
+        pruning_step = 0
+        for name, param in self.model.named_parameters():
 
-                # We do not prune bias term
-                if 'weight' in name:
-                    tensor = param.data.cpu().numpy()
-                    flattened_tensor = tensor.flatten()
-                    alive = flattened_tensor[flattened_tensor != 0]
-                    
-                    grad_tensor = param.data.cpu().numpy().flatten()
-                    alive_grad = grad_tensor[grad_tensor!=0]
-                    if name == 'model.init_conv.weight':
-                        print(f'alive data shape: {alive.shape}')
-                        print(f'alive grad shape: {alive_grad.shape}')
-                        break
-                    pruning_step += 1
-            pruning_step = 0
+            # We do not prune bias term
+            if 'weight' in name:
+                tensor = param.data.cpu().numpy()
+                flattened_tensor = tensor.flatten()
+                alive = flattened_tensor[flattened_tensor != 0]
+                
+                grad_tensor = param.grad.data.cpu().numpy()
+                alive_grad = grad_tensor[grad_tensor!=0]
+                if name == 'model.init_conv.weight':
+                    print(f'alive data shape: {alive.shape}')
+                    print(f'alive grad shape: {alive_grad.shape}')
+                    break
+                pruning_step += 1
+        pruning_step = 0
 
     def freezing_grad(self):
         global pruning_step
         global mask
 
         pruning_step=0
+        
+        # for name, p in self.model.named_parameters():
+        #     if 'weight' in name:
+
+        #         tensor = p.data.cpu().numpy()
+        #         grad_tensor = p.grad.data.cpu().numpy()
+
+        #         flattened_tensor = tensor.flatten()
+        #         nonzero_values = flattened_tensor[flattened_tensor != 0]
+        #         if len(nonzero_values) != 0:
+        #             EPS = np.percentile(abs(nonzero_values), 20)
+        #         if name == 'model.init_conv.weight': print(f'EPS: {EPS}')
+        #         grad_tensor = np.where(abs(tensor) < EPS, 0, grad_tensor)  #取最小20%
+        #         grad_mask = torch.ones_like(p)
+        #         print(f'grad_mask: {grad_mask.shape}')
+        #         print(f'mask: {mask[pruning_step].shape}')
+        #         grad_mask *= torch.from_numpy(mask[pruning_step]).to(p.device)
+        #         grad_mask[p.abs()<EPS] = 0
+        #         p.grad *= grad_mask
+        #     pruning_step+=1
 
         for name, p in self.model.named_parameters():
             if 'weight' in name:
@@ -1356,6 +1416,19 @@ class Trainer(object):
                 
                 grad_tensor *= mask[pruning_step]
                 p.grad = torch.from_numpy(grad_tensor).to(p.device)
+                # p.requires_grad = bool(mask[pruning_step])
+                if name == 'model.init_conv.weight': 
+                    grad_tensor = p.grad.data.cpu().numpy()
+                    print(f'EPS: {EPS}')
+                    print(f'unmasked number: {np.count_nonzero(mask[pruning_step])}')
+                    print(f'nonzero grad: {np.count_nonzero(grad_tensor)}')
+                    flattened_tensor = tensor.flatten()
+                    flattened_grad = grad_tensor.flatten()
+                    alive = flattened_tensor[flattened_tensor!=0]
+                    alive_grad = flattened_grad[flattened_grad!=0]
+                    print(f'alive data shape: {alive.shape}')
+                    print(f'alive grad shape: {alive_grad.shape}')
+                
 
                 pruning_step+=1
 
@@ -1383,5 +1456,3 @@ class Trainer(object):
 
         pruning_step=0
 
-    def get_comp(self):
-        return self.comp
