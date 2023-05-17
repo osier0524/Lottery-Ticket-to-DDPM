@@ -844,7 +844,7 @@ class Trainer(object):
     ):
         super().__init__()
 
-        self.cwd = '/content/drive/MyDrive/Projects/DDPM/'
+        self.cwd = os.getcwd()
 
         # accelerator
 

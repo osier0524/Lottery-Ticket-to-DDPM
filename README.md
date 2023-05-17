@@ -8,6 +8,45 @@ Images should be downloaded to a folder named dataset/XXX. Only need to download
 
 ## Usage
 
+Test case: Please use this block to test whether the program runs smoothly. This block can help save time.
+```python
+from denoising_diffusion_pytorch import Unet, GaussianDiffusion, Trainer
+
+model = Unet(
+    dim = 64,
+    dim_mults = (1, 2, 4, 8)
+)
+
+diffusion = GaussianDiffusion(
+    model,
+    image_size = 32,
+    timesteps = 4,           # number of steps
+    sampling_timesteps = 2,   # number of sampling timesteps (using ddim for faster inference [see citation for ddim paper])
+    loss_type = 'l1'            # L1 or L2
+)
+
+pruning_trainer = Trainer(
+    diffusion,
+    "./dataset/cifar10",               # path of dataset cifar10
+    train_batch_size = 20,
+    train_lr = 8e-5,
+    train_num_steps = 4,         # total training steps
+    prune_end_iter = 30,            # pruning steps
+    gradient_accumulate_every = 2,    # gradient accumulation steps
+    save_and_sample_every=2
+    ema_decay = 0.995,                # exponential moving average decay
+    results_folder = "./results",
+    amp = True,                       # turn on mixed precision
+    calculate_fid = True,              # whether to calculate fid during training
+    dataset = 'cifar10'
+    arch_type = 'DDPM'
+)
+
+# Start to train
+pruning_trainer.train()
+
+```
+
 1. Dataset: cifar10  Model: DDPM
 ```python
 from denoising_diffusion_pytorch import Unet, GaussianDiffusion, Trainer
