@@ -18,7 +18,7 @@ from torch.utils.data import Dataset, DataLoader
 
 from torch.optim import Adam
 
-from torchvision import transforms as T, utils as tv_utils
+from torchvision import transforms as T, utils as tv_utils, datasets as datasets
 from tensorboardX import SummaryWriter
 
 from einops import rearrange, reduce
@@ -780,16 +780,14 @@ class GaussianDiffusion(nn.Module):
 class Dataset(Dataset):
     def __init__(
         self,
-        folder,
+        dataset,
         image_size,
-        exts = ['jpg', 'jpeg', 'png', 'tiff'],
         augment_horizontal_flip = False,
         convert_image_to = None
     ):
         super().__init__()
-        self.folder = folder
+        self.dataset = dataset
         self.image_size = image_size
-        self.paths = [p for ext in exts for p in Path(f'{folder}').glob(f'**/*.{ext}')]
 
         maybe_convert_fn = partial(convert_image_to_fn, convert_image_to) if exists(convert_image_to) else nn.Identity()
 
@@ -801,12 +799,20 @@ class Dataset(Dataset):
             T.ToTensor()
         ])
 
+        if self.dataset == 'cifar10':
+            self.ds = datasets.CIFAR10('./data/'+self.dataset, train=True, download=True)
+        elif self.dataset == 'cifar100':
+            self.ds = datasets.CIFAR100('./data/'+self.dataset, train=True, download=True)
+        elif self.dataset == 'mnist':
+            self.ds = datasets.MNIST('./data/'+self.dataset, train=True, download=True)
+        
+        
+
     def __len__(self):
-        return len(self.paths)
+        return len(self.ds)
 
     def __getitem__(self, index):
-        path = self.paths[index]
-        img = Image.open(path)
+        img, label = self.ds[index]
         return self.transform(img)
 
 # trainer class
@@ -815,7 +821,6 @@ class Trainer(object):
     def __init__(
         self,
         diffusion_model,
-        folder,
         *,
         train_batch_size = 16,
         gradient_accumulate_every = 1,
@@ -894,8 +899,8 @@ class Trainer(object):
 
         # dataset and dataloader
 
-        self.ds = Dataset(folder, self.image_size, augment_horizontal_flip = augment_horizontal_flip, convert_image_to = convert_image_to)
-        
+        self.ds = Dataset(self.dataset, self.image_size, augment_horizontal_flip = augment_horizontal_flip, convert_image_to = convert_image_to)
+
         dl = DataLoader(self.ds, batch_size = train_batch_size, shuffle = True, pin_memory = True, num_workers = cpu_count())
 
         dl = self.accelerator.prepare(dl)
@@ -1267,7 +1272,7 @@ class Trainer(object):
         plt.xlabel("Unpruned Weights Percentage") 
         plt.ylabel("fid score") 
         plt.xticks(a, comp, rotation ="vertical") 
-        plt.ylim(0,5)
+        plt.ylim(0, np.floor(np.max(bestsco))+1)
         plt.legend() 
         plt.grid(color="gray") 
         utils.checkdir(f"{self.cwd}/plots/lt/{self.arch_type}/{self.dataset}/")

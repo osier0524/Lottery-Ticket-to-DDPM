@@ -27,11 +27,10 @@ diffusion = GaussianDiffusion(
 
 pruning_trainer = Trainer(
     diffusion,
-    "./dataset/cifar10",               # path of dataset cifar10
     train_batch_size = 20,
     train_lr = 8e-5,
     train_num_steps = 4,         # total training steps
-    prune_end_iter = 20,            # pruning steps
+    prune_end_iter = 5,            # pruning steps
     gradient_accumulate_every = 2,    # gradient accumulation steps
     save_and_sample_every=2
     ema_decay = 0.995,                # exponential moving average decay
@@ -67,7 +66,6 @@ diffusion = GaussianDiffusion(
 
 pruning_trainer = Trainer(
     diffusion,
-    "./dataset/cifar10",               # path of dataset cifar10
     train_batch_size = 20,
     train_lr = 8e-5,
     train_num_steps = 2000,         # total training steps
@@ -105,7 +103,6 @@ diffusion = GaussianDiffusion(
 
 pruning_trainer = Trainer(
     diffusion,
-    "./dataset/cifar100",               # path of dataset cifar100
     train_batch_size = 20,
     train_lr = 8e-5,
     train_num_steps = 2000,         # total training steps
