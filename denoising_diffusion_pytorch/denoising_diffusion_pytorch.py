@@ -788,6 +788,8 @@ class Dataset(Dataset):
         super().__init__()
         self.dataset = dataset
         self.image_size = image_size
+        if self.dataset == 'mnist':
+            convert_image_to = 'RGB'
 
         maybe_convert_fn = partial(convert_image_to_fn, convert_image_to) if exists(convert_image_to) else nn.Identity()
 
